@@ -97,6 +97,8 @@ class ObjathorRetriever:
             queries, convert_to_tensor=True, show_progress_bar=False
         )
         sbert_similarities = query_feature_sbert @ self.sbert_features.T
+        clip_similarities = clip_similarities.to(query_feature_sbert.device)
+        sbert_similarities = query_feature_sbert @ self.sbert_features.T.to(query_feature_sbert.device)
 
         if self.use_text:
             similarities = clip_similarities + sbert_similarities
