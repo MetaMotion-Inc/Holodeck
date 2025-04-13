@@ -6,8 +6,9 @@ import uvicorn
 from argparse import Namespace
 import ast
 
-from ai2holodeck.main import generate_single_scene, generate_multi_scenes, generate_variants
+from ai2holodeck.main import generate_multi_scenes, generate_variants
 from ai2holodeck.generation.holodeck import Holodeck
+from scene_generator import generate_single_scene
 from ai2holodeck.constants import OBJATHOR_ASSETS_DIR
 
 app = FastAPI(title="Holodeck API", description="API for generating 3D scenes with AI")
@@ -58,6 +59,7 @@ class GenerationResponse(BaseModel):
     success: bool
     message: str
     save_dir: Optional[str] = None
+    scene_data: Optional[dict] = None  # Add this field to store the scene JSON
 
 # Simplified request model that only requires the text prompt - renamed for clarity
 class SimpleSceneRequest(BaseModel):
@@ -221,7 +223,6 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
             openai_org=None
         )
         
-        # Initialize the model with defaults
         model = init_holodeck(
             single_room=False,
             openai_api_key=None,
@@ -229,25 +230,26 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
         )
         
         args = create_args_namespace(full_request, model)
-        
-        # Make sure the save directory exists
         os.makedirs(args.save_dir, exist_ok=True)
+        print("----------------------- Save dir: ", args.save_dir)
         
-        # Run in background to avoid timeout for long-running tasks
-        background_tasks.add_task(generate_single_scene, args)
+        # Use our wrapper function that returns the scene data
+        scene_data = generate_single_scene(args)
         
         folder_name = args.query.replace(" ", "_").replace("'", "")
         save_path = os.path.join(args.save_dir, folder_name)
         
         return GenerationResponse(
             success=True,
-            message=f"Scene generation started for description: {request.scene_description}. Results will be saved to {save_path}",
-            save_dir=save_path
+            message=f"Scene generated successfully",
+            save_dir=save_path,
+            scene_data=scene_data
         )
     except Exception as e:
         return GenerationResponse(
             success=False,
-            message=f"Error: {str(e)}"
+            message=f"Error: {str(e)}",
+            scene_data=None
         )
 
 if __name__ == "__main__":
