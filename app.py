@@ -11,6 +11,9 @@ from ai2holodeck.generation.holodeck import Holodeck
 from scene_generator import generate_single_scene
 from ai2holodeck.constants import OBJATHOR_ASSETS_DIR
 
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+
 app = FastAPI(title="Holodeck API", description="API for generating 3D scenes with AI")
 
 # Models for request validation
@@ -79,6 +82,8 @@ def create_args_namespace(request_data, model):
             setattr(args, bool_arg, str(getattr(args, bool_arg)))
     
     args.model = model
+    args.generate_image = "True"
+    args.generate_video = "False"
     
     return args
 
@@ -230,6 +235,7 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
         )
         
         args = create_args_namespace(full_request, model)
+       
         os.makedirs(args.save_dir, exist_ok=True)
         print("----------------------- Save dir: ", args.save_dir)
         
@@ -250,6 +256,19 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
             success=False,
             message=f"Error: {str(e)}",
             scene_data=None
+        )
+
+# Additional endpoint to serve the downloaded file
+@app.get("/{hash_id}")
+async def get_file(hash_id: str):
+    file_path = f"scene_assets/{hash_id}/{hash_id}.glb"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(
+        file_path,
+        media_type="model/gltf-binary",
+        filename=f"{hash_id}.glb"
         )
 
 if __name__ == "__main__":
