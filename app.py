@@ -255,7 +255,7 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
         return GenerationResponse(
             success=False,
             message=f"Error: {str(e)}",
-            scene_data=None
+            scene_data=None,
         )
 
 # Additional endpoint to serve the downloaded file
@@ -270,6 +270,35 @@ async def get_file(hash_id: str):
         media_type="model/gltf-binary",
         filename=f"{hash_id}.glb"
         )
+
+
+@app.get("/thumbnail/{save_dir}")
+async def get_thumbnail(save_dir: str):
+    # Find the first PNG file in the save directory
+    for dirs in os.listdir("data/scenes"):
+        if dirs.startswith(save_dir):
+            save_dir = dirs
+            break
+        
+    save_dir = os.path.join("data", "scenes", save_dir)
+
+    if os.path.exists(save_dir):
+        png_files = [f for f in os.listdir(save_dir) if f.endswith('.png')]
+        print("PNG files found: ", png_files)
+        if png_files:
+            thumbnail_path = os.path.join(save_dir, png_files[0])
+        else:
+            raise HTTPException(status_code=404, detail="No PNG files found in directory")
+    else:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    if not os.path.exists(thumbnail_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/png",
+        filename=png_files[0]
+    )
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
