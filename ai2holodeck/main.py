@@ -76,6 +76,8 @@ def generate_single_scene(args):
         f"Generation complete for {args.query}. Scene saved and any other data saved to {save_dir}."
     )
 
+    return save_dir
+
 
 def generate_multi_scenes(args):
     with open(args.query_file, "r") as f:

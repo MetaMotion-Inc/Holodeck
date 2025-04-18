@@ -240,10 +240,10 @@ async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Ba
         print("----------------------- Save dir: ", args.save_dir)
         
         # Use our wrapper function that returns the scene data
-        scene_data = generate_single_scene(args)
+        scene_data, save_path = generate_single_scene(args)
         
-        folder_name = args.query.replace(" ", "_").replace("'", "")
-        save_path = os.path.join(args.save_dir, folder_name)
+        # folder_name = args.query.replace(" ", "_").replace("'", "")
+        # save_path = os.path.join(args.save_dir, folder_name)
         
         return GenerationResponse(
             success=True,
