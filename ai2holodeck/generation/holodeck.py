@@ -118,9 +118,9 @@ class Holodeck:
         self.ceiling_generator = CeilingObjectGenerator(
             object_retriever=self.object_retriever, llm=self.llm
         )
-        self.small_object_generator = SmallObjectGenerator(
-            object_retriever=self.object_retriever, llm=self.llm
-        )
+        # self.small_object_generator = SmallObjectGenerator(
+        #     object_retriever=self.object_retriever, llm=self.llm
+        # )
 
         # additional requirements
         single_room_requirements = "I only need one room"
@@ -256,6 +256,16 @@ class Holodeck:
         scene["proceduralParameters"]["ceilingMaterial"] = first_wall_material
         return scene
 
+    def is_outdoor_scene(self, query: str) -> bool:
+        """Determine if the scene should be generated as an outdoor scene."""
+        prompt = f"""Given the scene description: "{query}", determine if this should be an outdoor or indoor scene.
+        Only respond with either "indoor" or "outdoor".
+        Examples of outdoor scenes: garden, park, forest, beach, playground, backyard, parking lot
+        Examples of indoor scenes: living room, kitchen, bedroom, office, bathroom, garage"""
+        
+        response = self.llm(prompt).strip().lower()
+        return response == "outdoor"
+
     def generate_scene(
         self,
         scene,
@@ -263,7 +273,7 @@ class Holodeck:
         save_dir: str,
         used_assets=[],
         add_ceiling=False,
-        generate_image=True,
+        generate_image=False,
         generate_video=False,
         add_time=True,
         use_constraint=True,
@@ -274,79 +284,132 @@ class Holodeck:
         query = query.replace("_", " ")
         scene["query"] = query
 
+        # Determine if the scene is indoor or outdoor
+        is_outdoor = self.is_outdoor_scene(query)
+        scene["is_outdoor"] = is_outdoor
+
         # empty house
         scene = self.empty_house(scene)
 
-        # generate rooms
-        scene = self.generate_rooms(
-            scene,
-            additional_requirements_room=self.additional_requirements_room,
-            used_assets=used_assets,
-        )
+        if is_outdoor:
+            # For outdoor scenes, we only need a single "room" to represent the outdoor area
+            # Define a default square outdoor area (10x10 meters)
+            default_outdoor_polygon = [
+                {"x": -5, "z": -5},
+                {"x": 5, "z": -5},
+                {"x": 5, "z": 5},
+                {"x": -5, "z": 5}
+            ]
+            outdoor_room = {
+                "roomType": "outdoor_area",
+                "floorPolygon": default_outdoor_polygon,
+                "floorMaterial": {"name": "Grass"},
+                "wallMaterial": None,
+            }
+            scene["rooms"] = [outdoor_room]
+            
+            # Skip walls, doors, and windows for outdoor scenes
+            scene["walls"] = []
+            scene["doors"] = []
+            scene["windows"] = []
 
-        # generate walls
-        scene = self.generate_walls(scene)
-
-        # generate doors
-        scene = self.generate_doors(
-            scene,
-            additional_requirements_door=self.additional_requirements_door,
-            used_assets=used_assets,
-        )
-
-        # generate windows
-        scene = self.generate_windows(
-            scene,
-            additional_requirements_window=self.additional_requirements_window,
-            used_assets=used_assets,
-        )
-
-        # select objects
-        self.object_selector.random_selection = random_selection
-        scene = self.select_objects(
-            scene,
-            additional_requirements_object=self.additional_requirements_object,
-            used_assets=used_assets,
-        )
-
-        # generate floor objects
-        self.floor_object_generator.use_milp = use_milp
-        scene["floor_objects"] = self.floor_object_generator.generate_objects(
-            scene, use_constraint=use_constraint
-        )
-
-        # generate wall objects
-        scene["wall_objects"] = self.wall_object_generator.generate_wall_objects(
-            scene, use_constraint=use_constraint
-        )
-
-        # combine floor and wall objects
-        scene["objects"] = scene["floor_objects"] + scene["wall_objects"]
-
-        # generate small objects
-        scene = self.generate_small_objects(scene, used_assets=used_assets)
-        scene["objects"] += scene["small_objects"]
-
-        # generate ceiling objects
-        if add_ceiling:
-            scene = self.generate_ceiling_objects(
+            # Modify object selection requirements for outdoor setting
+            outdoor_requirements = f"This is an outdoor scene: {query}. Select objects that would typically appear in this outdoor setting."
+            self.object_selector.random_selection = random_selection
+            scene = self.select_objects(
                 scene,
-                additional_requirements_ceiling=self.additional_requirements_ceiling,
+                additional_requirements_object=outdoor_requirements,
+                used_assets=used_assets,
             )
-            scene["objects"] += scene["ceiling_objects"]
 
-        # generate lights
-        lights = generate_lights(scene)
-        scene["proceduralParameters"]["lights"] = lights
+            # Generate floor objects with outdoor constraints
+            self.floor_object_generator.use_milp = use_milp
+            scene["floor_objects"] = self.floor_object_generator.generate_objects(
+                scene, use_constraint=use_constraint
+            )
 
-        # assign layers
-        scene = map_asset2layer(scene)
+            # Combine objects
+            scene["objects"] = scene["floor_objects"]
 
-        # assign skybox
-        scene = getSkybox(scene)
+            # Set outdoor skybox
+            scene["proceduralParameters"]["skyboxId"] = "OutdoorSkybox"
+        else:
+            # Original indoor scene generation logic
+            scene = self.empty_house(scene)
 
-        # change ceiling material
-        scene = self.change_ceiling_material(scene)
+            # generate rooms
+            scene = self.generate_rooms(
+                scene,
+                additional_requirements_room=self.additional_requirements_room,
+                used_assets=used_assets,
+            )
+
+            # generate walls
+            scene = self.generate_walls(scene)
+
+            # generate doors
+            scene = self.generate_doors(
+                scene,
+                additional_requirements_door=self.additional_requirements_door,
+                used_assets=used_assets,
+            )
+
+            # generate windows
+            scene = self.generate_windows(
+                scene,
+                additional_requirements_window=self.additional_requirements_window,
+                used_assets=used_assets,
+            )
+
+            # select objects
+            self.object_selector.random_selection = random_selection
+            scene = self.select_objects(
+                scene,
+                additional_requirements_object=self.additional_requirements_object,
+                used_assets=used_assets,
+            )
+
+            # generate floor objects
+            self.floor_object_generator.use_milp = use_milp
+            scene["floor_objects"] = self.floor_object_generator.generate_objects(
+                scene, use_constraint=use_constraint
+            )
+
+            # generate wall objects
+            scene["wall_objects"] = self.wall_object_generator.generate_wall_objects(
+                scene, use_constraint=use_constraint
+            )
+
+            # combine floor and wall objects
+            scene["objects"] = scene["floor_objects"] + scene["wall_objects"]
+
+            # generate small objects
+            # scene = self.generate_small_objects(scene, used_assets=used_assets)
+            # scene["objects"] += scene["small_objects"]
+
+            # generate ceiling objects
+            if add_ceiling:
+                scene = self.generate_ceiling_objects(
+                    scene,
+                    additional_requirements_ceiling=self.additional_requirements_ceiling,
+                )
+                scene["objects"] += scene["ceiling_objects"]
+
+            # generate lights
+            lights = generate_lights(scene)
+            scene["proceduralParameters"]["lights"] = lights
+
+            # assign layers
+            scene = map_asset2layer(scene)
+
+            # assign skybox
+            scene = getSkybox(scene)
+
+            # change ceiling material
+            scene = self.change_ceiling_material(scene)
+
+        # Add scene type to JSON data
+        scene["sceneType"] = "outdoor" if is_outdoor else "indoor"
 
         # create folder
         query_name = query.replace(" ", "_").replace("'", "")[:30]
@@ -420,7 +483,7 @@ class Holodeck:
                 query,
                 save_dir,
                 used_assets,
-                generate_image=True,
+                generate_image=False,
                 generate_video=False,
                 add_time=True,
             )
@@ -445,7 +508,7 @@ class Holodeck:
         save_dir,
         used_assets=[],
         add_ceiling=False,
-        generate_image=True,
+        generate_image=False,
         generate_video=False,
         add_time=True,
         use_constraint=False,

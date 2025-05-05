@@ -78,6 +78,17 @@ class FloorObjectGenerator:
 
         return results
 
+    def get_room_vertices(self, room):
+        """Get room vertices consistently for both indoor and outdoor scenes."""
+        if "vertices" in room:
+            return [(x, y) for (x, y) in room["vertices"]]
+        else:
+            # For outdoor scenes, use floorPolygon
+            if "vertices" not in room:
+                floor_polygon = room["floorPolygon"]
+                room["vertices"] = [(point["x"], point["z"]) for point in floor_polygon]
+            return [(x, y) for (x, y) in room["vertices"]]
+
     def generate_objects_per_room(self, args):
         room, doors, windows, open_walls, selected_objects, use_constraint = args
 
@@ -86,7 +97,8 @@ class FloorObjectGenerator:
             object_name: asset_id for object_name, asset_id in selected_floor_objects
         }
 
-        room_id = room["id"]
+        # Use roomType as id if id is not present
+        room_id = room.get("id", room["roomType"])
         room_type = room["roomType"]
         room_x, room_z = self.get_room_size(room)
 
@@ -133,7 +145,7 @@ class FloorObjectGenerator:
             ]
 
             # get initial state
-            room_vertices = [(x * 100, y * 100) for (x, y) in room["vertices"]]
+            room_vertices = [(x * 100, y * 100) for (x, y) in self.get_room_vertices(room)]
             room_poly = Polygon(room_vertices)
             initial_state = self.get_door_window_placements(
                 doors, windows, room_vertices, open_walls, self.add_window
@@ -166,8 +178,8 @@ class FloorObjectGenerator:
                 objects=", ".join(object_names),
             )
             room_origin = [
-                min(v[0] for v in room["vertices"]),
-                min(v[1] for v in room["vertices"]),
+                min(v[0] for v in self.get_room_vertices(room)),
+                min(v[1] for v in self.get_room_vertices(room)),
             ]
             all_is_placed = False
             while not all_is_placed:
