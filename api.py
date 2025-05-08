@@ -5,6 +5,7 @@ from fastapi import FastAPI, BackgroundTasks
 import uvicorn
 from argparse import Namespace
 import ast
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from ai2holodeck.main import generate_multi_scenes, generate_variants
 from ai2holodeck.generation.holodeck import Holodeck
@@ -15,17 +16,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 
 import json 
+import asyncio
+
+from blender_world import process_world_json
+
 
 app = FastAPI(title="Holodeck API", description="API for generating 3D scenes with AI")
-
-
-# created_scenes = {
-#     # TODO: Add a dictionary to keep track of created scenes
-#     "A bright and cozy girl’s bedroom with a comfy little bed, a soft pink blanket, cute wall art, a small desk for drawing or homework, and big windows letting in lots of sunlight.": "/home/gaurav/MetaMotion/Deployment/Holodeck/data/scenes/A_grils_bedroom",
-#     "A fun 80s-style casino room with patterned tile flooring, neon arcade machines, a pool table ready for a game, and tall blue bar tables for hanging out.": "/home/gaurav/MetaMotion/Deployment/Holodeck/data/scenes/an_80s_themed_casino",
-#     "A cozy modern living room with patterned tile flooring, neutral-toned seating, a couple of armchairs, indoor plants, and a relaxed vibe for lounging or conversation.": "/home/gaurav/MetaMotion/Deployment/Holodeck/data/scenes/house_with_living_room_bedroom",
-#     "A rustic wine cellar with dark wooden floors, scattered wooden barrels, and warm-toned brick partitions giving it an old-world charm.": "/home/gaurav/MetaMotion/Deployment/Holodeck/data/scenes/a_wine_cellar_with_red_brick_w",
-# }
+executor = ThreadPoolExecutor(max_workers=4)
 
 created_scenes = json.load(open("created_scenes.json", "r"))['created_scenes']
 print("Created scenes loaded: ", created_scenes)
@@ -81,6 +78,9 @@ class GenerationResponse(BaseModel):
 # Simplified request model that only requires the text prompt - renamed for clarity
 class SimpleSceneRequest(BaseModel):
     scene_description: str = Field(..., description="Text description of the scene to generate")
+
+class SimpleProcessingRequest(BaseModel):
+    scene_dir: str = Field(..., description="Directory containing the scene to process")
 
 # Helper function to create args namespace
 def create_args_namespace(request_data, model):
@@ -220,9 +220,7 @@ async def api_generate_variants(request: VariantGenerationRequest, background_ta
             message=f"Error: {str(e)}"
         )
 
-# Update the simplified endpoint to only accept scene_description
-@app.post("/generate", response_model=GenerationResponse)
-def generate_from_prompt(request: SimpleSceneRequest, background_tasks: BackgroundTasks):
+def cpu_bound_task(request):
     try:
         # Create a full request with defaults
         full_request = SceneGenerationRequest(
@@ -252,6 +250,8 @@ def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Backgrou
        
         os.makedirs(args.save_dir, exist_ok=True)
         print("----------------------- Save dir: ", args.save_dir)
+        print("----------------------- Query: ", args.query)
+        print(f"{args.query in list(created_scenes.keys())}")
         
 
         # Check if GLB for that scene already exists
@@ -269,6 +269,7 @@ def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Backgrou
 
         else:
             # Use our wrapper function that returns the scene data
+            print("Generating new scene...")
             scene_data, save_path = generate_single_scene(args)
             created_scenes[query] = save_path
             print("Scene generated and saved to: ", save_path)
@@ -290,6 +291,71 @@ def generate_from_prompt(request: SimpleSceneRequest, background_tasks: Backgrou
             message=f"Error: {str(e)}",
             scene_data=None,
         )
+
+# Update the simplified endpoint to only accept scene_description
+@app.post("/generate", response_model=GenerationResponse)
+async def generate_from_prompt(request: SimpleSceneRequest, background_tasks: BackgroundTasks):
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(executor, cpu_bound_task, request)
+    return result
+
+    
+@app.post("/process_file", response_model=GenerationResponse)
+async def process_file(request: SimpleProcessingRequest, background_tasks: BackgroundTasks):
+     # Post process the textures
+    scene_dir = request.scene_dir
+    save_dir = scene_dir #os.path.sep.join(scene_dir.split("/")[:-1])
+
+    print("Scene dir: ", scene_dir)
+    print("Save dir: ", save_dir)
+    
+    # Find the JSON file in the save_dir
+    # CHeck if glb file exists
+    glb_files = [f for f in os.listdir(scene_dir) if f.endswith('.glb')]
+    if not glb_files:
+
+        json_files = [f for f in os.listdir(scene_dir) if f.endswith('.json')]
+        if not json_files:
+            raise FileNotFoundError(f"No JSON files found in {scene_dir}")
+        
+        else:
+            # Use the first JSON file found
+            scene_file = os.path.join(scene_dir, json_files[0])
+
+            opt = {
+                "output": os.path.join(save_dir, "processed"),
+                "json": scene_file,
+                "content": "/home/gaurav/MetaMotion/Deployment/Holodeck/assets/",  # Adjust path as needed
+                "objaverse_path": "/home/gaurav/.objathor-assets/"  # Adjust path as needed
+            }
+            
+            class DictAsObject:
+                def __init__(self, d):
+                    self.__dict__.update(d)
+
+            opt = DictAsObject(opt)
+            
+            print(opt.json)
+            os.makedirs(opt.output, exist_ok=True)
+            
+            output_path = process_world_json(opt)
+
+            return GenerationResponse(
+                success=True,
+                message=f"Scene processed successfully",
+                save_dir=save_dir,
+                scene_data=None
+            )
+    else:
+        # Use the first GLB file found
+        return GenerationResponse(
+            success=True,
+            message=f"Scene processed successfully",
+            save_dir=save_dir,
+            scene_data=None
+        )
+
 
 # Additional endpoint to serve the downloaded file
 @app.get("/{hash_id}")

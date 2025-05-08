@@ -3,3 +3,4 @@ data/
 __pycache__/
 *scene_assets*
 scene_assets/*
+*assets*

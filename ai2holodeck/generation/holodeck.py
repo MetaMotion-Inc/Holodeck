@@ -324,8 +324,8 @@ class Holodeck:
         scene["objects"] = scene["floor_objects"] + scene["wall_objects"]
 
         # generate small objects
-        scene = self.generate_small_objects(scene, used_assets=used_assets)
-        scene["objects"] += scene["small_objects"]
+        # scene = self.generate_small_objects(scene, used_assets=used_assets)
+        # scene["objects"] += scene["small_objects"]
 
         # generate ceiling objects
         if add_ceiling:
@@ -372,9 +372,12 @@ class Holodeck:
 
         # save top down image
         if generate_image:
-            top_image = get_top_down_frame(scene, self.objaverse_asset_dir, 1024, 1024)
-            top_image.show()
-            top_image.save(os.path.join(save_dir, f"{query_name}.png"))
+            print("#" * 20)
+            print("Generated Image Arg - ", generate_image)
+            print("#" * 20)
+            # top_image = get_top_down_frame(scene, self.objaverse_asset_dir, 1024, 1024)
+            # top_image.show()
+            # top_image.save(os.path.join(save_dir, f"{query_name}.png"))
 
         # save video
         if generate_video:
