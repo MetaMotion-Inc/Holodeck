@@ -62,6 +62,15 @@ class ObjectSelector:
         self.reuse_selection = False
         self.multiprocessing = False
 
+    def get_room_vertices(self, room):
+        """Get room vertices consistently for both indoor and outdoor scenes."""
+        if "vertices" in room:
+            return room["vertices"]
+        else:
+            # For outdoor scenes, use floorPolygon
+            floor_polygon = room["floorPolygon"]
+            return [(point["x"], point["z"]) for point in floor_polygon]
+
     def select_objects(self, scene, additional_requirements="N/A"):
         rooms_types = [room["roomType"] for room in scene["rooms"]]
         room2area = {
@@ -75,7 +84,7 @@ class ObjectSelector:
             room["roomType"]: self.get_room_perimeter(room) for room in scene["rooms"]
         }
         room2vertices = {
-            room["roomType"]: [(x * 100, y * 100) for (x, y) in room["vertices"]]
+            room["roomType"]: [(x * 100, y * 100) for (x, y) in self.get_room_vertices(room)]
             for room in scene["rooms"]
         }
 
@@ -393,12 +402,12 @@ class ObjectSelector:
             return (z_dim, wall_height, x_dim)
 
     def get_room_area(self, room):
-        room_vertices = room["vertices"]
+        room_vertices = self.get_room_vertices(room)
         room_polygon = Polygon(room_vertices)
         return room_polygon.area
 
     def get_room_perimeter(self, room):
-        room_vertices = room["vertices"]
+        room_vertices = self.get_room_vertices(room)
         room_polygon = Polygon(room_vertices)
         return room_polygon.length
 
@@ -735,7 +744,7 @@ class ObjectSelector:
 
     def update_floor_capacity(self, room2floor_capacity, scene):
         for room in scene["rooms"]:
-            room_vertices = room["vertices"]
+            room_vertices = self.get_room_vertices(room)
             room_poly = Polygon(room_vertices)
             for door in scene["doors"]:
                 for door_vertices in door["doorBoxes"]:
@@ -756,7 +765,7 @@ class ObjectSelector:
 
     def update_wall_capacity(self, room2wall_capacity, scene):
         for room in scene["rooms"]:
-            room_vertices = room["vertices"]
+            room_vertices = self.get_room_vertices(room)
             room_poly = Polygon(room_vertices)
             for window in scene["windows"]:
                 for window_vertices in window["windowBoxes"]:

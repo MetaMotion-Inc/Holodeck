@@ -73,6 +73,7 @@ def is_image_loaded(image_filepath):
 
 
 def add_material(obj, path_texture, add_uv=False, material_pos=-1):
+    print("Texture path: ", path_texture)
     if add_uv:
         bpy.ops.object.select_all(action='DESELECT')
         bpy.context.view_layer.objects.active = obj
@@ -289,6 +290,19 @@ def import_glb(file_path, location=(0, 0, 0), rotation=(0, 0, 0), scale=(0.01, 0
 
     return imported_object
 
+
+def create_floor(floor_data):
+    floor_vertices = floor_data['vertices']
+    
+    # Check if scene is outdoor from floor_data
+    is_outdoor = floor_data.get('is_outdoor', False)
+    
+    if is_outdoor:
+        # For outdoor scenes, create floor without requiring an ID
+        obj = create_wall_mesh(f"floor_{floor_data['roomType']}", floor_vertices) 
+    else:
+        # For indoor scenes, use the existing ID-based approach
+        obj = create_wall_mesh(floor_data['id'], floor_vertices)
 #########################
 #########################
 #########################
@@ -570,8 +584,48 @@ def process_world_json(opt):
         for vert in floor['vertices']:
             floor_vertices.append((vert[0],vert[1],0))
         floor_vertices = np.array(floor_vertices)
-        obj = create_wall_mesh(floor['id'],floor_vertices)
+        
+        # For outdoor scenes, create a sky box
+        if 'is_outdoor' in data and data['is_outdoor']:
+            min_x = np.min(floor_vertices[:,0])
+            max_x = np.max(floor_vertices[:,0])
+            min_y = np.min(floor_vertices[:,1])
+            max_y = np.max(floor_vertices[:,1])
+            # Calculate a suitable size, maybe slightly larger than the floor
+            floor_span_x = max_x - min_x
+            floor_span_y = max_y - min_y
+            floor_size = max(floor_span_x, floor_span_y) * 1.5 # Make skybox larger than floor
+            
+            # Use fixed sky texture path
+            sky_texture_path = "assets/sky/sky_39_2k.png"
+            
+            # Ensure the texture path is absolute or relative to the blend file/script
+            if not os.path.isabs(sky_texture_path):
+                sky_texture_path = bpy.path.abspath(f"//{sky_texture_path}")
 
+            # Create textured cube for the sky box using the imported function
+            # Note: create_textured_cube handles its own location and material setup
+            # We might need to adjust its location after creation if needed.
+            # sky_box = create_textured_cube(cube_size=floor_size, texture_filepath=sky_texture_path)
+            
+            # # Set the location for the created skybox (if create_textured_cube doesn't handle it)
+            # # Check if sky_box is not None before setting location
+            # if sky_box:
+            #     sky_box.location = ((max_x + min_x)/2, (max_y + min_y)/2, floor_size / 2) # Center it and raise slightly
+
+            # Remove the old add_material call for sky_box
+            # add_material(sky_box, sky_texture_path) 
+            
+            # Update the JSON data with the selected sky texture
+            data['proceduralParameters']['skyTexture'] = os.path.basename(sky_texture_path) # Use basename
+            # Save the updated JSON
+            with open(opt.json, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+        # Continue with regular floor creation
+        floor_id = f"floor_{floor['roomType']}" if 'is_outdoor' in data and data['is_outdoor'] else floor['id']
+        obj = create_wall_mesh(floor_id, floor_vertices)
+        
         bpy.ops.object.select_all(action='DESELECT')
         print("#"*50)
         print("ROOMS", obj)
@@ -588,16 +642,24 @@ def process_world_json(opt):
         # Switch back to Object mode
         bpy.ops.object.mode_set(mode='OBJECT')
 
-        if not floor["id"] in floor_room_text:
-            asset = floor['floorMaterial']['ambientcg']
+        # Handle floor textures based on scene type
+        floor_key = floor_id  # Use the generated ID as key
+        if not floor_key in floor_room_text:
+            material_info = floor.get('floorMaterial', {})
+            asset = material_info.get('ambientcg')  # The outdoor vs indoor decision is now handled in process_textures
             if asset in all_texture_by_class and len(all_texture_by_class[asset]) > 0:
                 asset_path = np.random.choice(all_texture_by_class[asset])
-                floor_room_text[floor['id']] = asset_path
-                print(asset_path)
+                floor_room_text[floor_key] = asset_path
+
             else:
-                print(f"Warning: No textures found for asset '{asset}'. Skipping floor '{floor['id']}'.")
-                continue
-        add_material(obj,floor_room_text[floor['id']])
+                print(f"Warning: No textures found for asset '{asset}'. Using fallback texture.")
+                fallback_asset = 'WoodFloor'
+                if fallback_asset in all_texture_by_class and len(all_texture_by_class[fallback_asset]) > 0:
+                    floor_room_text[floor_key] = np.random.choice(all_texture_by_class[fallback_asset])
+                else:
+                    continue
+        
+        add_material(obj, floor_room_text[floor_key])
 
 
         # add_material(obj,"assets/textures/Concrete040/")

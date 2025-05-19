@@ -52,6 +52,19 @@ def generate_single_scene(args):
         print("Generating from an empty scene.")
         scene = args.model.get_empty_scene()
 
+    # Add default wall height if not present (for outdoor scenes)
+    if 'wall_height' not in scene:
+        scene['wall_height'] = 3  # Default wall height in meters
+        
+    # Add default empty open_walls if not present
+    if 'open_walls' not in scene:
+        scene['open_walls'] = []
+
+    # Ensure each room has an ID that matches its roomType
+    for room in scene['rooms']:
+        if 'id' not in room:
+            room['id'] = room['roomType']
+
     try:
         _, save_dir = args.model.generate_scene(
             scene=scene,
