@@ -72,83 +72,136 @@ class ObjectSelector:
             return [(point["x"], point["z"]) for point in floor_polygon]
 
     def select_objects(self, scene, additional_requirements="N/A"):
-        rooms_types = [room["roomType"] for room in scene["rooms"]]
-        room2area = {
-            room["roomType"]: self.get_room_area(room) for room in scene["rooms"]
-        }
-        room2size = {
-            room["roomType"]: self.get_room_size(room, scene["wall_height"])
-            for room in scene["rooms"]
-        }
-        room2perimeter = {
-            room["roomType"]: self.get_room_perimeter(room) for room in scene["rooms"]
-        }
-        room2vertices = {
-            room["roomType"]: [(x * 100, y * 100) for (x, y) in self.get_room_vertices(room)]
-            for room in scene["rooms"]
-        }
+        # Early return if reusing selection plan
+        if "object_selection_plan" in scene and self.reuse_selection:
+            return scene["object_selection_plan"], scene["selected_objects"]
 
+        # Pre-compute all room data in a single pass
+        room_data = {}
+        for room in scene["rooms"]:
+            room_type = room["roomType"]
+            vertices = self.get_room_vertices(room)
+            vertices_scaled = [(x * 100, y * 100) for (x, y) in vertices]
+            room_poly = Polygon(vertices)
+
+            room_data[room_type] = {
+                "area": room_poly.area,
+                "perimeter": room_poly.length,
+                "vertices": vertices,
+                "vertices_scaled": vertices_scaled,
+                "size": self.get_room_size(room, scene["wall_height"]),
+                "poly": room_poly,
+            }
+
+        # Pre-compute capacities
         room2floor_capacity = {
-            room_type: [room_area * self.floor_capacity_ratio, 0]
-            for room_type, room_area in room2area.items()
+            room_type: [data["area"] * self.floor_capacity_ratio, 0]
+            for room_type, data in room_data.items()
         }
-        room2floor_capacity = self.update_floor_capacity(room2floor_capacity, scene)
         room2wall_capacity = {
-            room_type: [room_perimeter * self.wall_capacity_ratio, 0]
-            for room_type, room_perimeter in room2perimeter.items()
-        }
-        selected_objects = {
-            room["roomType"]: {"floor": [], "wall": []} for room in scene["rooms"]
+            room_type: [data["perimeter"] * self.wall_capacity_ratio, 0]
+            for room_type, data in room_data.items()
         }
 
+        # Update capacities (doors, windows, open walls) in a single pass
+        self._batch_update_capacities(
+            room_data, room2floor_capacity, room2wall_capacity, scene
+        )
+
+        rooms_types = list(room_data.keys())
+        selected_objects = {room_type: {"floor": [], "wall": []} for room_type in rooms_types}
+
+        # If we have an existing object selection plan
         if "object_selection_plan" in scene:
             object_selection_plan = scene["object_selection_plan"]
-            if self.reuse_selection:
-                selected_objects = scene["selected_objects"]
-            else:
-                for room_type in rooms_types:
-                    floor_objects, _, wall_objects, _ = self.get_objects_by_room(
-                        object_selection_plan[room_type],
-                        scene,
-                        room2size[room_type],
-                        room2floor_capacity[room_type],
-                        room2wall_capacity[room_type],
-                        room2vertices[room_type],
-                    )
-                    selected_objects[room_type]["floor"] = floor_objects
-                    selected_objects[room_type]["wall"] = wall_objects
-        else:
-            object_selection_plan = {room["roomType"]: [] for room in scene["rooms"]}
-            packed_args = [
-                (
-                    room_type,
+            for room_type in rooms_types:
+                floor_objects, _, wall_objects, _ = self.get_objects_by_room(
+                    object_selection_plan[room_type],
                     scene,
-                    additional_requirements,
-                    room2size,
-                    room2floor_capacity,
-                    room2wall_capacity,
-                    room2vertices,
+                    room_data[room_type]["size"],
+                    room2floor_capacity[room_type],
+                    room2wall_capacity[room_type],
+                    room_data[room_type]["vertices_scaled"],
                 )
-                for room_type in rooms_types
-            ]
+                selected_objects[room_type]["floor"] = floor_objects
+                selected_objects[room_type]["wall"] = wall_objects
+        else:
+            object_selection_plan = {room_type: [] for room_type in rooms_types}
+            packed_args = []
 
-            if self.multiprocessing:
-                pool = multiprocessing.Pool(processes=4)
-                results = pool.map(self.plan_room, packed_args)
-                pool.close()
-                pool.join()
-            else:
-                results = [self.plan_room(args) for args in packed_args]
+            for room_type in rooms_types:
+                packed_args.append(
+                    (
+                        room_type,
+                        scene,
+                        additional_requirements,
+                        {room_type: room_data[room_type]["size"]},  # Only include needed data
+                        {room_type: room2floor_capacity[room_type]},
+                        {room_type: room2wall_capacity[room_type]},
+                        {room_type: room_data[room_type]["vertices_scaled"]},
+                    )
+                )
+
+            # Process rooms (no multiprocessing used)
+            results = [self.plan_room(args) for args in packed_args]
 
             for room_type, result in results:
-                selected_objects[room_type]["floor"] = result["floor"]
-                selected_objects[room_type]["wall"] = result["wall"]
-                object_selection_plan[room_type] = result["plan"]
+                selected_objects[room_type]["floor"] = result.get("floor", [])
+                selected_objects[room_type]["wall"] = result.get("wall", [])
+                object_selection_plan[room_type] = result.get("plan", {})
 
         print(
             f"\n{Fore.GREEN}AI: Here is the object selection plan:\n{object_selection_plan}{Fore.RESET}"
         )
         return object_selection_plan, selected_objects
+
+    def _batch_update_capacities(self, room_data, room2floor_capacity, room2wall_capacity, scene):
+        """Update floor and wall capacities in one batch operation"""
+        # Process doors (affects floor capacity)
+        for door in scene["doors"]:
+            for door_box in door["doorBoxes"]:
+                door_poly = Polygon(door_box)
+                door_center = door_poly.centroid
+                door_area = door_poly.area
+
+                for room_type, data in room_data.items():
+                    if data["poly"].contains(door_center):
+                        room_id = next(
+                            room["id"] for room in scene["rooms"] if room["roomType"] == room_type
+                        )
+                        room2floor_capacity[room_type][1] += door_area * 0.6
+
+        # Process windows (affects wall capacity)
+        for window in scene["windows"]:
+            for window_box in window["windowBoxes"]:
+                window_poly = Polygon(window_box)
+                window_center = window_poly.centroid
+                window_width = max(
+                    window_poly.bounds[2] - window_poly.bounds[0],
+                    window_poly.bounds[3] - window_poly.bounds[1],
+                )
+
+                for room_type, data in room_data.items():
+                    if data["poly"].contains(window_center):
+                        room2wall_capacity[room_type][1] += window_width * 0.6
+
+        # Process open walls (affects both capacities)
+        if scene["open_walls"] != []:
+            for open_wall_box in scene["open_walls"]["openWallBoxes"]:
+                open_wall_poly = Polygon(open_wall_box)
+                open_wall_center = open_wall_poly.centroid
+                open_wall_width = max(
+                    open_wall_poly.bounds[2] - open_wall_poly.bounds[0],
+                    open_wall_poly.bounds[3] - open_wall_poly.bounds[1],
+                )
+
+                for room_type, data in room_data.items():
+                    if data["poly"].contains(open_wall_center):
+                        room_id = next(
+                            room["id"] for room in scene["rooms"] if room["roomType"] == room_type
+                        )
+                        room2floor_capacity[room_type][1] += open_wall_poly.area * 0.6
+                        room2wall_capacity[room_type][1] += open_wall_width * 0.6
 
     def plan_room(self, args):
         (
